@@ -71,10 +71,13 @@
   }
 
   function authComputeDeviceId() {
-    var uuid = authDeviceUuid();
-    var fp = authFingerprint();
-    return 'fp_' + sha256Hex(fp + ':' + uuid);
+  // Kita buat ID acak murni setiap kali dipanggil
+  var randomHex = '';
+  for (var i = 0; i < 16; i++) {
+    randomHex += Math.floor(Math.random() * 16).toString(16);
   }
+  return 'fp_' + randomHex + Date.now().toString(16);
+}
 
   function authLoadCache() {
     try {
