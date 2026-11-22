@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PBWEB - VANGUARD ELITE
 // @namespace    vanguardelite.local
-// @version      2.4.1
-// @description  VANGUARD ELITE (NOVA core: aimbot + ESP + full features + anti-kick + performance mode + key gate, keyless)
+// @version      2.1.0
+// @description  VANGUARD ELITE (NOVA core: aimbot + ESP + full features + anti-kick, keyless)
 // @match        *://pbmobile.app/*
 // @match        *://*.pbmobile.app/*
 // @run-at       document-start
@@ -20,235 +20,7 @@
   if (W.__pb) return;
 
   /* ============================================================================
-     0. AUTH GATE (FAIL-CLOSED) - KEY SERVER via Google Apps Script
-     ============================================================================ */
-  var AUTH_URL = 'https://script.google.com/macros/s/AKfycbyMnuyWmRnZz8M-ip5PMwvtkS3l11JjQppbeFuTj-KdZ4RSSRxN-BCZMiQna55DwzzGNg/exec';
-
-  var AUTH_KEY = 'vanguard_auth_v1';
-  var AUTH_DEVICE_KEY = 'vanguard_device_uuid_v1';
-  var AUTH_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;     // 24 jam offline tolerance
-  var AUTH_STATE = { status: 'pending', reason: '', key: '', deviceId: '', token: '', tokenExp: 0, bound: '' };
-
-  function authLog() {
-    try { console.log.apply(console, ['[VANGUARD AUTH]'].concat([].slice.call(arguments))); } catch (e) {}
-  }
-
-  function sha256Hex(str) {
-    var h1 = 0x811c9dc5, h2 = 0x01000193;
-    for (var i = 0; i < str.length; i++) {
-      var c = str.charCodeAt(i);
-      h1 ^= c; h1 = (h1 * 16777619) >>> 0;
-      h2 = ((h2 << 5) - h2 + c) >>> 0;
-    }
-    return ('00000000' + h1.toString(16)).slice(-8) + ('00000000' + h2.toString(16)).slice(-8);
-  }
-
-  // Fungsi ini diubah agar menghasilkan ID baru setiap kali dipanggil
-  function authComputeDeviceId() {
-    var randomHex = '';
-    for (var i = 0; i < 16; i++) {
-      randomHex += Math.floor(Math.random() * 16).toString(16);
-    }
-    return 'fp_' + randomHex + Date.now().toString(16);
-  }
-
-  function authLoadCache() {
-    try {
-      var raw = localStorage.getItem(AUTH_KEY);
-      if (!raw) return null;
-      var d = JSON.parse(raw);
-      if (!d || typeof d !== 'object') return null;
-      return d;
-    } catch (e) { return null; }
-  }
-
-  function authSaveCache(obj) {
-    try { localStorage.setItem(AUTH_KEY, JSON.stringify(obj)); } catch (e) {}
-  }
-
-  function authClearCache() {
-    try { localStorage.removeItem(AUTH_KEY); } catch (e) {}
-  }
-
-  function authReasonText(reason) {
-    var m = {
-      invalid: 'Key tidak ditemukan / salah.',
-      revoked: 'Key sudah dinonaktifkan.',
-      used_on_other_device: 'Key sudah dipakai di HP lain. Hubungi admin.',
-      rate_limited: 'Terlalu banyak percobaan. Tunggu beberapa menit.',
-      missing_params: 'Key kosong.',
-      server_error: 'Server error. Coba lagi.',
-      sheet_not_found: 'Sheet tidak ditemukan (Hubungi admin).',
-      no_keys: 'Belum ada key di database (Hubungi admin).',
-      network: 'Server tidak terjangkau. Cek koneksi internet.'
-    };
-    return m[reason] || ('Gagal: ' + reason);
-  }
-
-  function authVerify(key, interactive) {
-    var deviceId = authComputeDeviceId();
-    AUTH_STATE.key = key;
-    AUTH_STATE.deviceId = deviceId;
-
-    if (!AUTH_URL || AUTH_URL.indexOf('script.google.com') < 0) {
-      AUTH_STATE.status = 'fail';
-      AUTH_STATE.reason = 'no_url';
-      return Promise.resolve({ ok: false, reason: 'no_url' });
-    }
-
-    var body = { key: key, deviceId: deviceId };
-    var url = AUTH_URL;
-
-    return new Promise(function (resolve) {
-      var done = false;
-      var timer = setTimeout(function () {
-        if (done) return; done = true;
-        AUTH_STATE.status = 'fail';
-        AUTH_STATE.reason = 'network';
-        resolve({ ok: false, reason: 'network' });
-      }, 8000);
-
-      try {
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(body)
-        }).then(function (r) { return r.text(); })
-          .then(function (txt) {
-            if (done) return; done = true;
-            clearTimeout(timer);
-            var obj;
-            try { obj = JSON.parse(txt); } catch (e) { obj = null; }
-            if (!obj || typeof obj !== 'object') {
-              AUTH_STATE.status = 'fail';
-              AUTH_STATE.reason = 'bad_response';
-              resolve({ ok: false, reason: 'bad_response' });
-              return;
-            }
-            if (obj.ok) {
-              AUTH_STATE.status = 'ok';
-              AUTH_STATE.reason = '';
-              AUTH_STATE.token = String(obj.token || '');
-              AUTH_STATE.tokenExp = Date.now() + AUTH_TOKEN_TTL_MS;
-              AUTH_STATE.bound = String(obj.bound || '');
-              authSaveCache({
-                key: key, deviceId: deviceId, token: AUTH_STATE.token,
-                tokenExp: AUTH_STATE.tokenExp, bound: AUTH_STATE.bound, savedAt: Date.now()
-              });
-              resolve({ ok: true, token: AUTH_STATE.token, bound: AUTH_STATE.bound });
-            } else {
-              AUTH_STATE.status = 'fail';
-              AUTH_STATE.reason = String(obj.reason || 'unknown');
-              resolve({ ok: false, reason: AUTH_STATE.reason });
-            }
-          })
-          .catch(function () {
-            if (done) return; done = true;
-            clearTimeout(timer);
-            AUTH_STATE.status = 'fail';
-            AUTH_STATE.reason = 'network';
-            resolve({ ok: false, reason: 'network' });
-          });
-      } catch (e) {
-        if (done) return; done = true;
-        clearTimeout(timer);
-        AUTH_STATE.status = 'fail';
-        AUTH_STATE.reason = 'network';
-        resolve({ ok: false, reason: 'network' });
-      }
-    });
-  }
-
-  // Overlay Login Fullscreen
-  function authShowGateOverlay(reason, keyDefault) {
-    try {
-      if (document.getElementById('vanguard-gate')) return;
-      var wrap = document.createElement('div');
-      wrap.id = 'vanguard-gate';
-      wrap.style.cssText = [
-        'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;',
-        'background:#090e17; font-family:"Segoe UI",Tahoma,system-ui,sans-serif;color:#e2e8f0;'
-      ].join('');
-      wrap.innerHTML =
-        '<div style="width:340px;max-width:92vw;background:rgba(15,23,42,0.98);border:1px solid rgba(6,182,212,0.6);border-radius:14px;padding:24px 20px;box-shadow:0 20px 60px rgba(0,0,0,0.9);">' +
-          '<div style="font-size:16px;font-weight:900;color:#67e8f9;letter-spacing:0.6px;margin-bottom:6px;text-align:center;">VANGUARD ELITE</div>' +
-          '<div style="font-size:11px;color:#94a3b8;margin-bottom:20px;text-align:center;">Sistem Terkunci. Masukkan key akses untuk melanjutkan.</div>' +
-          '<div id="vanguard-gate-msg" style="font-size:11px;color:#fda4af;margin-bottom:10px;min-height:16px;text-align:center;font-weight:bold;">' + (reason || '') + '</div>' +
-          '<input id="vanguard-gate-input" type="text" placeholder="VG-XXXX-XXXX" value="' + (keyDefault || '') + '" ' +
-            'style="width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid rgba(6,182,212,0.6);background:#0f172a;color:#f1f5f9;font-size:14px;font-weight:800;letter-spacing:2px;outline:none;text-transform:uppercase;margin-bottom:16px;text-align:center;">' +
-          '<button id="vanguard-gate-btn" style="width:100%;padding:12px 0;border-radius:8px;border:0;background:linear-gradient(135deg,#0891b2,#10b981);color:#fff;font-weight:900;font-size:14px;cursor:pointer;">MASUK</button>' +
-          '<div style="font-size:9px;color:#64748b;margin-top:16px;text-align:center;">1 Key hanya untuk 1 Device. Pastikan koneksi internet lancar.</div>' +
-        '</div>';
-      (document.body || document.documentElement).appendChild(wrap);
-
-      var input = wrap.querySelector('#vanguard-gate-input');
-      var msg = wrap.querySelector('#vanguard-gate-msg');
-      var btn = wrap.querySelector('#vanguard-gate-btn');
-
-      function trySubmit() {
-        var k = String(input.value || '').trim().toUpperCase();
-        if (!/^VG-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(k)) {
-          msg.textContent = 'Format key salah. (Contoh: VG-AB12-CD34)';
-          return;
-        }
-        msg.textContent = 'Memverifikasi...';
-        msg.style.color = '#67e8f9';
-        btn.disabled = true;
-        btn.textContent = 'MEMUAT...';
-
-        authVerify(k, true).then(function (res) {
-          btn.disabled = false;
-          btn.textContent = 'MASUK';
-          msg.style.color = '#fda4af';
-          if (res.ok) {
-            wrap.remove();
-            window.location.reload(); // Reload halaman agar script berjalan bersih
-          } else {
-            msg.textContent = authReasonText(res.reason);
-          }
-        }).catch(function () {
-          btn.disabled = false;
-          btn.textContent = 'MASUK';
-          msg.style.color = '#fda4af';
-          msg.textContent = authReasonText('network');
-        });
-      }
-
-      btn.addEventListener('click', trySubmit);
-      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') trySubmit(); });
-      setTimeout(function () { try { input.focus(); } catch (e) {} }, 100);
-    } catch (e) {}
-  }
-
-  // Cek Login Sebelum Boot
-  (function authBoot() {
-    var cached = authLoadCache();
-    var now = Date.now();
-    var deviceId = authComputeDeviceId();
-
-    if (cached && cached.token && cached.tokenExp > now) {
-      // Cache valid, coba verifikasi ulang ke server di background
-      AUTH_STATE.status = 'ok';
-      AUTH_STATE.key = cached.key;
-      authVerify(cached.key, false).then(function(res){
-        if (!res.ok && res.reason === 'used_on_other_device') {
-           authClearCache();
-           location.reload();
-        }
-      });
-      return;
-    }
-
-    // Tidak ada cache / expired -> Tampilkan layar kunci
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function(){ authShowGateOverlay('', ''); });
-    } else {
-      authShowGateOverlay('', '');
-    }
-  })();
-
-  /* ============================================================================
-     1. TIKTOK BADGE
+     1. TOP-LEFT TIKTOK BADGE (@pbmobile_id)
      ============================================================================ */
   function ensureLobbyBadge() {
     try {
@@ -272,17 +44,13 @@
       (document.body || document.documentElement).appendChild(badge);
     } catch (e) {}
   }
-  
-  // Hanya tampilkan badge jika sudah login (Auth OK)
-  if (AUTH_STATE.status === 'ok') {
-     ensureLobbyBadge();
-  }
+  ensureLobbyBadge();
 
   /* ============================================================================
      2. CORE ENGINE
      ============================================================================ */
   function bootCore() {
-    var V = '2.4.1';
+    var V = '2.1.0';
     var BRAND = 'VANGUARD ELITE';
 
     function log() {
@@ -527,7 +295,7 @@
     } catch (e) {}
 
     /* --------------------------------------------------------------------------
-       2.3 UTILITAS UMUM
+       2.3 UTILITAS UMUM, GAME INSTANCE & CANVAS HELPER
        -------------------------------------------------------------------------- */
     function game() {
       try {
@@ -589,7 +357,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.4 KALKULASI TARGET
+       2.4 KALKULASI TARGET, HITBOX & LINE OF SIGHT
        -------------------------------------------------------------------------- */
     var _hpOut = { x: 0, y: 0, z: 0 };
     var _leadOut = { x: 0, y: 0, z: 0 };
@@ -715,7 +483,7 @@
       if (!p) return hasLineOfSight(g, cam, point);
       var now = performance.now();
       var c = _losCache.get(p);
-      if (c && now - c.t < perfLosMs()) return c.v;
+      if (c && now - c.t < 300) return c.v;
       var v = hasLineOfSight(g, cam, point);
       _losCache.set(p, { t: now, v: v });
       return v;
@@ -733,7 +501,7 @@
       if (!point || !isInsidePOVCircle(cam, point, p)) return false;
       var now = performance.now();
       var c = _aimbotLosCache.get(p);
-      if (c && now - c.t < perfAimbotLosMs()) return c.v;
+      if (c && now - c.t < 80) return c.v;
       var v = hasLineOfSight(g, cam, point);
       _aimbotLosCache.set(p, { t: now, v: v });
       return v;
@@ -776,7 +544,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.5 INPUT MOUSE & YAW/PITCH
+       2.5 INPUT MOUSE, TOUCH & YAW/PITCH LOCK
        -------------------------------------------------------------------------- */
     function aimWrite(dx, dy) {
       AIM.dx += dx;
@@ -892,7 +660,7 @@
     addEventListener('touchcancel', touchEnd, true);
 
     /* --------------------------------------------------------------------------
-       2.6 MOVEMENT & SURVIVAL
+       2.6 MOVEMENT & SURVIVAL (FLY, NOCLIP, GODMODE, RESPAWN)
        -------------------------------------------------------------------------- */
     var FLY = { on: 0, mode: 'hover', jumpHeld: 0, crouchHeld: 0, riseSpeed: 7, maxHeight: 35, groundY: null, hoverY: null };
     var FLYB = { on: 1, last: 0, interval: 16, smooth: 1.0 };
@@ -1272,7 +1040,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.8 WEAPON & SILENT AIM
+       2.8 WEAPON & SILENT AIM (HOLD AUTO-SHOOT + 360 RAPID TAP)
        -------------------------------------------------------------------------- */
     var PR = { on: 0, ms: 120 };
     var RF = { on: 0, antiSpam: 1, lastFireAt: 0, minGapMs: 65 };
@@ -1282,133 +1050,6 @@
     var SL = { on: 0 };
     var DM = { at: 0, mult: 1.3 };
     var WB = 200;
-
-    /* --------------------------------------------------------------------------
-       2.8b PERFORMANCE MODE
-       -------------------------------------------------------------------------- */
-    var PERF = {
-      on: 0,
-      level: 2,
-      lastApply: 0,
-      refRenderer: null,
-      refScene: null,
-      refCamera: null,
-      orig: { px: null, shadow: null, far: null, fogFar: null },
-      applied: { px: null, shadow: null, far: null, fog: null, hidden: [] }
-    };
-
-    function perfVisualFps() {
-      if (!PERF.on) return 33;
-      if (PERF.level <= 1) return 66;
-      if (PERF.level === 2) return 83;
-      return 125;
-    }
-    function perfRadarFps() {
-      if (!PERF.on) return 50;
-      return PERF.level >= 3 ? 200 : 50;
-    }
-    function perfLosMs() {
-      if (!PERF.on) return 300;
-      return PERF.level >= 2 ? 600 : 450;
-    }
-    function perfAimbotLosMs() {
-      if (!PERF.on) return 80;
-      return PERF.level >= 2 ? 160 : 120;
-    }
-
-    function perfRestoreRefs() {
-      var r = PERF.refRenderer;
-      var cam = PERF.refCamera;
-      var scene = PERF.refScene;
-      if (r && PERF.orig.px != null && typeof r.setPixelRatio === 'function') {
-        try { r.setPixelRatio(PERF.orig.px); } catch (e) {}
-      }
-      if (r && r.shadowMap && PERF.orig.shadow != null) {
-        try { r.shadowMap.enabled = PERF.orig.shadow; } catch (e) {}
-      }
-      if (cam && PERF.orig.far != null) {
-        try { cam.far = PERF.orig.far; cam.updateProjectionMatrix(); } catch (e) {}
-      }
-      if (scene && scene.fog && PERF.orig.fogFar != null) {
-        try { scene.fog.far = PERF.orig.fogFar; } catch (e) {}
-      }
-      if (PERF.applied.hidden && PERF.applied.hidden.length) {
-        for (var i = 0; i < PERF.applied.hidden.length; i++) {
-          try { PERF.applied.hidden[i].visible = true; PERF.applied.hidden[i].__pbHidden = 0; } catch (e) {}
-        }
-      }
-      PERF.refRenderer = null;
-      PERF.refScene = null;
-      PERF.refCamera = null;
-      PERF.orig = { px: null, shadow: null, far: null, fogFar: null };
-      PERF.applied = { px: null, shadow: null, far: null, fog: null, hidden: [] };
-    }
-
-    function perfApply(g) {
-      if (!PERF.on) { perfRestoreRefs(); return; }
-      var now = performance.now();
-      if (now - PERF.lastApply < 1000) return;
-      PERF.lastApply = now;
-
-      var r = g && g.renderer;
-      var cam = g && g.camera;
-      var scene = g && g.scene;
-
-      if (PERF.refRenderer && r && PERF.refRenderer !== r) perfRestoreRefs();
-      if (PERF.refScene && scene && PERF.refScene !== scene) perfRestoreRefs();
-
-      if (PERF.level <= 1) {
-        if (PERF.refRenderer) perfRestoreRefs();
-        return;
-      }
-
-      if (r && typeof r.getPixelRatio === 'function' && typeof r.setPixelRatio === 'function') {
-        if (!PERF.refRenderer) { PERF.refRenderer = r; PERF.orig.px = r.getPixelRatio(); }
-        var targetPx = PERF.level >= 3 ? 0.75 : Math.max(1.0, Math.min(PERF.orig.px || 1, 1.25));
-        var curPx = r.getPixelRatio() || 1;
-        if (Math.abs(curPx - targetPx) > 0.01) {
-          try { r.setPixelRatio(targetPx); } catch (e) {}
-        }
-        PERF.applied.px = targetPx;
-      }
-      if (r && r.shadowMap) {
-        if (!PERF.refRenderer) { PERF.refRenderer = r; PERF.orig.shadow = !!r.shadowMap.enabled; }
-        if (r.shadowMap.enabled) { try { r.shadowMap.enabled = false; } catch (e) {} }
-        PERF.applied.shadow = false;
-      }
-      if (cam && typeof cam.far === 'number') {
-        if (!PERF.refCamera) { PERF.refCamera = cam; PERF.orig.far = cam.far; }
-        var shrink = PERF.level >= 3 ? 0.6 : 0.8;
-        var newFar = Math.max(60, (PERF.orig.far || cam.far) * shrink);
-        if (Math.abs(cam.far - newFar) > 1) {
-          try { cam.far = newFar; cam.updateProjectionMatrix(); } catch (e) {}
-        }
-        PERF.applied.far = newFar;
-      }
-      if (scene && scene.fog && typeof scene.fog.far === 'number') {
-        if (!PERF.refScene) { PERF.refScene = scene; PERF.orig.fogFar = scene.fog.far; }
-        var fogShrink = PERF.level >= 3 ? 0.55 : 0.75;
-        var newFog = Math.max(40, (PERF.orig.fogFar || scene.fog.far) * fogShrink);
-        if (Math.abs(scene.fog.far - newFog) > 1) {
-          try { scene.fog.far = newFog; } catch (e) {}
-        }
-        PERF.applied.fog = newFog;
-      }
-
-      if (PERF.level >= 3 && scene && typeof scene.traverse === 'function') {
-        if (PERF.applied.hidden && PERF.applied.hidden.length) return;
-        var hidden = [];
-        try {
-          scene.traverse(function (o) {
-            if (!o || o.__pbHidden) return;
-            if (o.isPoints || (o.isSprite && !o.isMesh)) {
-              if (o.visible) { o.visible = false; o.__pbHidden = 1; hidden.push(o); }
-            }
-          });
-        } catch (e) {}
-        PERF.applied.hidden = hidden;
-      }
-    }
 
     function rfCanFire(now) {
       return !RF.on || !RF.antiSpam || (now - RF.lastFireAt) >= RF.minGapMs;
@@ -1469,6 +1110,7 @@
       return null;
     }
 
+    /* Pilih target silent aim berdasarkan SUDUT dari crosshair (bukan jarak saja). */
     function saUpdateHead(g) {
       if (!SA.on || !g || !g.P || !g.P.s || g.P.s.dead) { SA_HEAD.bot = null; return; }
       var s = g.P.s, cam = g.camera, list = g.bots || [];
@@ -1540,7 +1182,6 @@
       var now = performance.now();
       if (typeof p.nextShot === 'number' && p.nextShot > now + 500) return false;
       if (typeof p.reloading === 'number' && p.reloading > 0) return false;
-      if (p.reloading === true) return false;
       if (typeof p.swapEnd === 'number' && p.swapEnd > now + 500) return false;
       return true;
     }
@@ -1635,7 +1276,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.9 WEBSOCKET FILTER & ANTI-KICK
+       2.9 WEBSOCKET FILTER & ANTI-KICK (KICK-DROP + AUTO-RECONNECT)
        -------------------------------------------------------------------------- */
     function pbOut(d) {
       if (typeof d === 'string' && (d.indexOf('acflag') >= 0 || d.indexOf('ac\\u0066lag') >= 0)) return null;
@@ -1678,12 +1319,7 @@
             ns.onerror = function (ev) { try { if (rec.onerror) rec.onerror.call(rec.sock, ev); } catch (e) {} };
             ns.onclose = function (ev) {
               var code = ev ? ev.code : 0; rec.tries++;
-              if (code === 1008) {
-                if (rec.tries > 6) { rec.dead = 1; return; }
-                revive(rec, Math.min(4000, 400 * rec.tries));
-                return;
-              }
-              if (rec.tries > 40) { rec.dead = 1; return; }
+              if (rec.tries > 40 || code === 1008) { rec.dead = 1; return; }
               revive(rec, Math.min(8000, 200 * Math.pow(1.3, Math.min(rec.tries, 12))));
             };
           }, wait == null ? 200 : wait);
@@ -1727,7 +1363,7 @@
     })();
 
     /* --------------------------------------------------------------------------
-       2.10 ESP & VISUAL OVERLAYS
+       2.10 ESP & VISUAL OVERLAYS (BOX, BONE, RADAR, TRACER, POV RING)
        -------------------------------------------------------------------------- */
     var E = { on: 1, nameOn: 0, wrap: null, slots: [], last: 0, n: 0, v: null };
     var HPO = { on: 0 };
@@ -1951,7 +1587,7 @@
       if (!rdInit()) return;
       RD.el.style.display = 'block';
       var now = performance.now();
-      if (now - RD.last < perfRadarFps()) return;
+      if (now - RD.last < 50) return;
       RD.last = now;
 
       var s = g.P && g.P.s;
@@ -2095,8 +1731,6 @@
       var cam = g.camera;
       if (!p || !self) return;
 
-      try { perfApply(g); } catch (e) {}
-
       if (FLY.on) { try { flyTick(0.016); } catch (e) {} }
       if (FL.noclip) {
         try {
@@ -2215,27 +1849,26 @@
       fcTick();
       if (RD.on) { try { rdDraw(g); } catch (e) {} } else if (RD.el) { RD.el.style.display = 'none'; }
 
-      var vFps = perfVisualFps();
       if (!E.on) {
         eClear();
-      } else if (now - _timers.esp >= vFps) {
+      } else if (now - _timers.esp >= 33) {
         _timers.esp = now;
         if (eInit()) { try { eDraw(g); } catch (err) { eClear(); } }
       }
 
-      if (now - _timers.bone >= vFps) {
+      if (now - _timers.bone >= 33) {
         _timers.bone = now;
         try { beDraw(g); } catch (e) { beClear(); }
       }
 
-      if (TR.on && now - _timers.tracer >= vFps) {
+      if (TR.on && now - _timers.tracer >= 33) {
         _timers.tracer = now;
         try { trDraw(g); } catch (e) {}
       } else if (!TR.on && TR.wrap) {
         trClear();
       }
 
-      if (SA.on && (SA.autoShoot || SA.tapShot)) {
+      if (SA.on) {
         if (now - _timers.silentScan >= 33) {
           _timers.silentScan = now;
           try {
@@ -2326,14 +1959,8 @@
       st.bots = n;
       st.enemies = en;
 
-      var wantAcquire = P.aimbotOn && (AB.freshFire || (fireHeld > 0 && now >= AB.lockUntil));
-      if (!wantAcquire && !P.autoFire && !fireHeld) {
-        st.bots = n;
-        aimFlush(g);
-        return;
-      }
-
       var doAimbot = false;
+      var wantAcquire = P.aimbotOn && (AB.freshFire || (fireHeld > 0 && now >= AB.lockUntil));
       if (wantAcquire) {
         AB.freshFire = 0;
         var bestAb = null, bestAbD = 1e9;
@@ -2450,7 +2077,7 @@
     }, 120);
 
     /* --------------------------------------------------------------------------
-       2.12 PUBLIC INTERNAL APIS
+       2.12 PUBLIC INTERNAL APIS (__pb, __pbvis, __pbqc, __pbx)
        -------------------------------------------------------------------------- */
     var PB_API = {
       state: function () {
@@ -2612,58 +2239,6 @@
           bypass: SNB.on
         };
       },
-      perf: function (on) {
-        PERF.on = on ? 1 : 0;
-        if (!PERF.on) perfRestoreRefs();
-        else PERF.lastApply = 0;
-        return PERF.on;
-      },
-      perfLevel: function (lvl) {
-        if (typeof lvl === 'number' && lvl >= 1 && lvl <= 3) {
-          PERF.level = lvl | 0;
-          PERF.lastApply = 0;
-        }
-        return PERF.level;
-      },
-      perfSt: function () {
-        return {
-          on: PERF.on, level: PERF.level,
-          applied: {
-            px: PERF.applied.px, shadow: PERF.applied.shadow,
-            far: PERF.applied.far, fog: PERF.applied.fog,
-            hidden: PERF.applied.hidden ? PERF.applied.hidden.length : 0
-          },
-          refs: { renderer: !!PERF.refRenderer, scene: !!PERF.refScene, camera: !!PERF.refCamera }
-        };
-      },
-      authSt: function () {
-        return {
-          status: AUTH_STATE.status, reason: AUTH_STATE.reason,
-          key: AUTH_STATE.key, deviceId: AUTH_STATE.deviceId,
-          hasToken: !!AUTH_STATE.token, tokenExp: AUTH_STATE.tokenExp,
-          bound: AUTH_STATE.bound, url: AUTH_URL
-        };
-      },
-      authReset: function () {
-        try { authClearCache(); } catch (e) {}
-        try { localStorage.removeItem(AUTH_DEVICE_KEY); } catch (e) {}
-        AUTH_STATE = { status: 'pending', reason: '', key: '', deviceId: '', token: '', tokenExp: 0, bound: '' };
-        authShowGateOverlay('', '');
-        return 'reset';
-      },
-      authSet: function (key) {
-        return authVerify(String(key || '').trim().toUpperCase(), true);
-      },
-      panic: function () {
-        try {
-          PERF.on = 0; perfRestoreRefs();
-          SA.on = 0; SA.autoShoot = 0; SA.tapShot = 0; releaseSilentFire();
-          FL.godmode = 0; FL.noclip = 0; FLY.on = 0; ncUninstall();
-          try { saveSettings(); } catch (e) {}
-        } catch (e) {}
-        try { location.reload(); } catch (e) {}
-        return 'panic';
-      },
       st: function () {
         return {
           pred: PR.on, rapid: RF.on, rapidAntiSpam: RF.antiSpam,
@@ -2678,7 +2253,6 @@
           noFall: FL.noFall, infNade: FL.infNade, infNadeMax: FL.infNadeMax,
           silentNade: SN.on, silentNadeSide: SN.side, silentNadeMode: SN.mode,
           silentNadeTarget: SN.targetName, silentNadeBypass: SNB.on, espName: E.nameOn,
-          perf: PERF.on, perfLevel: PERF.level,
           saHead: SA_HEAD.bot ? { x: +SA_HEAD.x.toFixed(2), y: +SA_HEAD.y.toFixed(2), z: +SA_HEAD.z.toFixed(2), name: SA_HEAD.bot.name, hp: SA_HEAD.bot.hp } : null
         };
       }
@@ -2697,7 +2271,7 @@
     });
 
     /* --------------------------------------------------------------------------
-       2.13 SETTINGS PERSISTENCE
+       2.13 SETTINGS PERSISTENCE (LENGKAP + DEBOUNCE)
        -------------------------------------------------------------------------- */
     var SETTINGS_KEY = 'vanguard_settings_v4';
     var _saveTimer = 0;
@@ -2726,8 +2300,7 @@
           silentNade: SN.on, silentNadeSide: SN.side, silentNadeMode: SN.mode,
           silentNadeTarget: SN.targetName, silentNadeBypass: xs.silentNadeBypass,
           silentNadeHoming: SN.homing, silentNadeLOS: SN.requireLOS,
-          esp: E.on, espName: xs.espName,
-          perf: PERF.on, perfLevel: PERF.level
+          esp: E.on, espName: xs.espName
         };
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
       } catch (e) {}
@@ -2803,9 +2376,6 @@
         if (d.esp != null) d.esp ? VIS_API.on() : VIS_API.off();
         if (d.espName != null) VIS_API.name(d.espName);
 
-        if (d.perf != null) PBX_API.perf(d.perf);
-        if (d.perfLevel >= 1 && d.perfLevel <= 3) PBX_API.perfLevel(d.perfLevel);
-
         if (d.flyOn != null) PBX_API.fly(d.flyOn);
       } catch (e) { log('restoreSettings err', e); }
     }
@@ -2818,7 +2388,7 @@
     setInterval(saveSettings, 5000);
 
     /* ============================================================================
-       3. UI SYSTEM
+       3. UI SYSTEM (CYBER CYAN THEME & FULL DRAGGABLE PANEL)
        ============================================================================ */
     (function pbUI() {
       if (W.__pbUI) return;
@@ -2986,6 +2556,7 @@
         root.classList.add('expanded');
       });
 
+      // Drag
       (function makeDraggable(handle) {
         var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
         handle.addEventListener('pointerdown', function (e) {
@@ -3031,6 +2602,7 @@
         handle.addEventListener('pointerup', function () { dragging = false; });
       })(tabbar);
 
+      // Helpers
       function sec(title, icon) {
         return mk('div', 'fk-sec', '<i class="fa-solid ' + icon + '"></i>' + title);
       }
@@ -3088,6 +2660,7 @@
         return b;
       }
 
+      // AIM page
       (function () {
         var pg = pages.aim;
         pg.appendChild(sec('Aim Assist', 'fa-crosshairs'));
@@ -3153,6 +2726,7 @@
         pg.appendChild(rInv);
       })();
 
+      // VISUAL page
       (function () {
         var pg = pages.visual;
         pg.appendChild(sec('ESP', 'fa-eye'));
@@ -3191,6 +2765,7 @@
           function (v) { return v.toFixed(1) + 'x'; }));
       })();
 
+      // WEAPON page
       (function () {
         var pg = pages.weapon;
         pg.appendChild(sec('Fire', 'fa-gun'));
@@ -3227,6 +2802,7 @@
         pg.appendChild(r8);
       })();
 
+      // SILENT page
       (function () {
         var pg = pages.silent;
         pg.appendChild(sec('Silent Aim', 'fa-bolt'));
@@ -3268,6 +2844,7 @@
           function (v) { return v + 'ms'; }));
       })();
 
+      // NADE page
       (function () {
         var pg = pages.nade;
         pg.appendChild(sec('Grenade', 'fa-bomb'));
@@ -3304,6 +2881,7 @@
           function (v) { PBX_API.silentNadeMode(v); }));
       })();
 
+      // MISC page
       (function () {
         var pg = pages.misc;
         pg.appendChild(sec('Survival', 'fa-shield'));
@@ -3345,42 +2923,6 @@
         r9.appendChild(sw(function () { return QC.fast; }, function (v) { QC_API.cfg({ fast: v ? 1 : 0 }); }));
         pg.appendChild(r9);
 
-        pg.appendChild(sec('Performance', 'fa-gauge-high'));
-        var rp1 = row('Performance Mode', 'Turunkan beban visual & render');
-        rp1.appendChild(sw(function () { return PERF.on; }, function (v) { PBX_API.perf(v); }));
-        pg.appendChild(rp1);
-
-        pg.appendChild(slider('Perf Level', 1, 3, 1,
-          function () { return PERF.level; },
-          function (v) { PBX_API.perfLevel(v); },
-          function (v) { return 'L' + v; }));
-
-        var rp2 = row('Panic', 'Matikan semua & reload');
-        var pb1 = btn('PANIC', function () { PBX_API.panic(); });
-        pb1.style.background = 'linear-gradient(135deg,#dc2626,#b91c1c)';
-        pb1.style.borderColor = 'transparent';
-        rp2.appendChild(pb1);
-        pg.appendChild(rp2);
-
-        pg.appendChild(sec('Auth', 'fa-key'));
-        var ra1 = row('Auth Status', 'Lihat status key');
-        var raBtn = btn('STATUS', function () {
-          var s = PBX_API.authSt();
-          toast(s.status.toUpperCase() + (s.reason ? ' · ' + s.reason : '') + (s.hasToken ? ' · token' : ''));
-        });
-        ra1.appendChild(raBtn);
-        pg.appendChild(ra1);
-
-        var ra2 = row('Auth Reset', 'Ganti key / lepas device');
-        var raBtn2 = btn('RESET KEY', function () {
-          PBX_API.authReset();
-          toast('Key direset, isi ulang');
-        });
-        raBtn2.style.background = 'linear-gradient(135deg,#f59e0b,#d97706)';
-        raBtn2.style.borderColor = 'transparent';
-        ra2.appendChild(raBtn2);
-        pg.appendChild(ra2);
-
         pg.appendChild(sec('Lainnya', 'fa-wrench'));
         var r10 = row('Lob', 'Mode lempar');
         r10.appendChild(sw(function () { return SL.on; }, function (v) { PBX_API.lob(v); }));
@@ -3402,12 +2944,5 @@
     requestAnimationFrame(mainLoop);
   }
 
-  try {
-    // HANYA JALANKAN CHEAT JIKA AUTH BERHASIL
-    if (AUTH_STATE.status === 'ok') {
-      bootCore();
-    } else {
-      console.log('[VANGUARD] Cheat diblokir. Menunggu key valid.');
-    }
-  } catch (e) { try { console.error('[VANGUARD] boot fail', e); } catch (_) {} }
+  try { bootCore(); } catch (e) { try { console.error('[VANGUARD] boot fail', e); } catch (_) {} }
 })(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
