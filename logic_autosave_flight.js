@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PBWEB - VANGUARD ELITE
 // @namespace    vanguardelite.local
-// @version      2.4.0
+// @version      2.4.1
 // @description  VANGUARD ELITE (NOVA core: aimbot + ESP + full features + anti-kick + performance mode + key gate, keyless)
 // @match        *://pbmobile.app/*
 // @match        *://*.pbmobile.app/*
@@ -43,41 +43,14 @@
     return ('00000000' + h1.toString(16)).slice(-8) + ('00000000' + h2.toString(16)).slice(-8);
   }
 
-  function authDeviceUuid() {
-    try {
-      var existing = localStorage.getItem(AUTH_DEVICE_KEY);
-      if (existing && /^[a-f0-9]{32}$/.test(existing)) return existing;
-      var buf = new Uint8Array(16);
-      try { (W.crypto || W.msCrypto).getRandomValues(buf); } catch (e) {
-        for (var i = 0; i < 16; i++) buf[i] = Math.floor(Math.random() * 256);
-      }
-      var hex = '';
-      for (var j = 0; j < 16; j++) hex += ('0' + buf[j].toString(16)).slice(-2);
-      localStorage.setItem(AUTH_DEVICE_KEY, hex);
-      return hex;
-    } catch (e) { return 'nouuid'; }
-  }
-
-  function authFingerprint() {
-    var parts = [];
-    try { parts.push(navigator.userAgent || ''); } catch (e) {}
-    try { parts.push(String(screen.width) + 'x' + String(screen.height) + 'x' + String(screen.colorDepth || 0)); } catch (e) {}
-    try { parts.push(String(devicePixelRatio || 1)); } catch (e) {}
-    try { parts.push(String(Intl.DateTimeFormat().resolvedOptions().timeZone || '')); } catch (e) {}
-    try { parts.push(String(navigator.language || '')); } catch (e) {}
-    try { parts.push(String(navigator.hardwareConcurrency || 0)); } catch (e) {}
-    try { parts.push(String(navigator.platform || '')); } catch (e) {}
-    return sha256Hex(parts.join('|'));
-  }
-
+  // Fungsi ini diubah agar menghasilkan ID baru setiap kali dipanggil
   function authComputeDeviceId() {
-  // Kita buat ID acak murni setiap kali dipanggil
-  var randomHex = '';
-  for (var i = 0; i < 16; i++) {
-    randomHex += Math.floor(Math.random() * 16).toString(16);
+    var randomHex = '';
+    for (var i = 0; i < 16; i++) {
+      randomHex += Math.floor(Math.random() * 16).toString(16);
+    }
+    return 'fp_' + randomHex + Date.now().toString(16);
   }
-  return 'fp_' + randomHex + Date.now().toString(16);
-}
 
   function authLoadCache() {
     try {
@@ -253,7 +226,7 @@
     var now = Date.now();
     var deviceId = authComputeDeviceId();
 
-    if (cached && cached.token && cached.tokenExp > now && cached.deviceId === deviceId) {
+    if (cached && cached.token && cached.tokenExp > now) {
       // Cache valid, coba verifikasi ulang ke server di background
       AUTH_STATE.status = 'ok';
       AUTH_STATE.key = cached.key;
@@ -309,7 +282,7 @@
      2. CORE ENGINE
      ============================================================================ */
   function bootCore() {
-    var V = '2.4.0';
+    var V = '2.4.1';
     var BRAND = 'VANGUARD ELITE';
 
     function log() {
