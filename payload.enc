@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PBWEB - VANGUARD ELITE
 // @namespace    vanguardelite.local
-// @version      2.2.3
-// @description  VANGUARD ELITE (Hyperion Hard-Lock Aimbot + ESP + 360 Silent Aim + Anti-Kick + Performance Mode, Stable Build)
+// @version      2.2.5
+// @description  VANGUARD ELITE (Hyperion Hard-Lock Aimbot + Silent Aim POV + Auto POV Circle + ESP + 360 Silent Aim + Anti-Kick + Performance Mode)
 // @match        *://pbmobile.app/*
 // @match        *://*.pbmobile.app/*
 // @run-at       document-start
@@ -52,7 +52,7 @@
      2. CORE ENGINE
      ============================================================================ */
   function bootCore() {
-    var V = '2.2.3';
+    var V = '2.2.5';
     var BRAND = 'VANGUARD ELITE';
 
     function log() {
@@ -209,7 +209,7 @@
     })();
 
     /* --------------------------------------------------------------------------
-       2.2 STATE & KONFIGURASI GLOBAL (HYPERION HARD-LOCK AIMBOT INTEGRATED)
+       2.2 STATE & KONFIGURASI GLOBAL (HYPERION HARD-LOCK + SILENT AIM POV)
        -------------------------------------------------------------------------- */
     var HIDDEN = { pb: null, pbvis: null, pbnade: null, pbqc: null, pbx: null };
 
@@ -221,13 +221,14 @@
       mode: 'near',
       bias: 0.35,
       aimMode: 'pov',
-      povCircleR: 220,
+      povCircleR: 150,
       hitbox: 'head',
-      hardLock: 0,       // 0 = Langsung kunci target saat masuk POV (stabil di mobile & PC)
+      hardLock: 0,
       sticky: 0.85,
       bulletSpeed: 350,
       leadFactor: 1.0,
-      lockMode: 'pov'
+      lockMode: 'pov',
+      silentPov: 0
     };
 
     var O = { sens: 0.5, fov: 70, invert: false };
@@ -256,7 +257,8 @@
     var st = {
       v: V, aim: true, G: false, bots: 0, enemies: 0,
       lock: 0, err: 0, fire: 0, dist: 0, hitbox: P.hitbox,
-      hardLock: P.hardLock, sticky: P.sticky, lead: 0, lockMode: P.lockMode
+      hardLock: P.hardLock, sticky: P.sticky, lead: 0, lockMode: P.lockMode,
+      silentPov: P.silentPov
     };
 
     var SF = { on: 1 };
@@ -431,25 +433,29 @@
     }
 
     var _povCache = new WeakMap();
-    function isInsidePOVCircle(cam, hp, p) {
+    function getPOVCircleDistSq(cam, hp) {
       try {
-        var now = performance.now();
-        if (p) {
-          var c = _povCache.get(p);
-          if (c && now - c.t < 45) return c.v;
-        }
         if (!_pv || _pvCam !== cam) {
           _pv = cam.position.clone();
           _pvCam = cam;
         }
         var ndc = _pv.set(hp.x, hp.y, hp.z).project(cam);
-        if (!(ndc.z > -1 && ndc.z < 1)) {
-          if (p) _povCache.set(p, { t: now, v: false });
-          return false;
-        }
+        if (!(ndc.z > -1 && ndc.z < 1)) return -1;
         var px = ndc.x * (innerWidth * 0.5);
         var py = -ndc.y * (innerHeight * 0.5);
-        var v = (px * px + py * py) <= (P.povCircleR * P.povCircleR);
+        return px * px + py * py;
+      } catch (e) { return -1; }
+    }
+
+    function isInsidePOVCircle(cam, hp, p) {
+      try {
+        var now = performance.now();
+        if (p) {
+          var c = _povCache.get(p);
+          if (c && now - c.t < 35) return c.v;
+        }
+        var dSq = getPOVCircleDistSq(cam, hp);
+        var v = dSq >= 0 && dSq <= (P.povCircleR * P.povCircleR);
         if (p) _povCache.set(p, { t: now, v: v });
         return v;
       } catch (e) { return false; }
@@ -616,7 +622,6 @@
       }
     });
 
-    // Hanya mendeteksi tombol tembak asli game (tidak salah deteksi saat geser layar kanan bawah)
     var fireIds = new Set();
     function isFireButton(el) {
       if (!el || !el.closest) return false;
@@ -1031,14 +1036,14 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.8 WEAPON & SILENT AIM (360° + MANUAL & AUTO-SHOOT SUPPORT)
+       2.8 WEAPON & SILENT AIM (360° + SILENT AIM POV LEGIT MODE)
        -------------------------------------------------------------------------- */
     var PR = { on: 0, ms: 120 };
     var RF = { on: 0, antiSpam: 1, lastFireAt: 0, minGapMs: 65 };
     var QC = { on: 0, fast: 0, slot: 0, ammo: -1, gate: {}, invRef: null, n: 0, sw: 0, dead: 0 };
     var IS = { on: 0 };
     var TB = { on: 0, at: 0 };
-    var DM = { at: 0, mult: 1.3 };
+    var DM = { at: 0, mult: 1.0 };
     var WB = 500;
 
     /* --------------------------------------------------------------------------
@@ -1187,6 +1192,9 @@
     };
     var SA_HEAD = { x: 0, y: 0, z: 0, bot: null, validUntil: 0 };
 
+    // Target khusus Silent Aim POV (strictly inside POV Circle, normal weapon damage)
+    var SA_POV_TGT = { x: 0, y: 0, z: 0, bot: null, validUntil: 0 };
+
     function saGetPoint(bot, fromPt) {
       if (!bot) return null;
       var base = (SA.target === 'body') ? bodyPoint(bot) : headPoint(bot);
@@ -1205,6 +1213,49 @@
       return null;
     }
 
+    function saPovUpdate(g) {
+      if (!P.silentPov || !g || !g.P || !g.P.s || g.P.s.dead) { SA_POV_TGT.bot = null; return; }
+      var s = g.P.s, cam = g.camera, list = g.bots || [];
+      if (!cam || !cam.matrixWorld) { SA_POV_TGT.bot = null; return; }
+
+      var me = cam.matrixWorld.elements;
+      var cx = me[12], cy = me[13], cz = me[14];
+      var maxDist = Math.max(P.reach, 500);
+      var maxRSq = P.povCircleR * P.povCircleR;
+
+      var best = null, bestScreenDistSq = 1e12, bestPt = null;
+
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        if (!isHumanEnemy(p, s)) continue;
+
+        var pt = getTargetPointLead(p, { x: cx, y: cy, z: cz });
+        if (!pt) continue;
+
+        var dx = pt.x - cx, dy = pt.y - cy, dz = pt.z - cz;
+        var d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < 0.5 || d > maxDist) continue;
+
+        var dSq = getPOVCircleDistSq(cam, pt);
+        if (dSq < 0 || dSq > maxRSq) continue;
+
+        if (!FL.wallbang && !hasLineOfSightThrottled(g, cam, p, pt)) continue;
+
+        if (dSq < bestScreenDistSq) {
+          bestScreenDistSq = dSq;
+          best = p;
+          bestPt = { x: pt.x, y: pt.y, z: pt.z };
+        }
+      }
+
+      if (!best || !bestPt) { SA_POV_TGT.bot = null; return; }
+      SA_POV_TGT.x = bestPt.x;
+      SA_POV_TGT.y = bestPt.y;
+      SA_POV_TGT.z = bestPt.z;
+      SA_POV_TGT.bot = best;
+      SA_POV_TGT.validUntil = performance.now() + 250;
+    }
+
     function patchBotHitTest() {
       var g = G || game();
       var L = g && g.bots;
@@ -1216,6 +1267,51 @@
         (function (bot, origHT) {
           bot.hitTest = function (o, d, m) {
             var range = (FL.wallbang && wbGun() && typeof m === 'number') ? Math.max(m, WB) : m;
+
+            // 1. Mode Silent Aim POV (Hanya target di dalam POV Circle, tanpa 1-hit kill)
+            if (P.silentPov && !SA.on) {
+              try {
+                var g1 = G || game();
+                if (!g1 || !g1.P || !g1.P.s || !isHumanEnemy(this, g1.P.s)) {
+                  return origHT.call(this, o, d, range);
+                }
+                if (!SA_POV_TGT.bot || !isHumanEnemy(SA_POV_TGT.bot, g1.P.s)) {
+                  saPovUpdate(g1);
+                }
+                if (SA_POV_TGT.bot !== this) {
+                  return origHT.call(this, o, d, range);
+                }
+                var cam1 = g1.camera;
+                var me1 = cam1 && cam1.matrixWorld && cam1.matrixWorld.elements;
+                if (!me1) return origHT.call(this, o, d, range);
+                var ox1 = me1[12], oy1 = me1[13], oz1 = me1[14];
+                var curPt = getTargetPointLead(this, { x: ox1, y: oy1, z: oz1 });
+                if (!curPt || !isInsidePOVCircle(cam1, curPt, this)) {
+                  return origHT.call(this, o, d, range);
+                }
+                SA_POV_TGT.x = curPt.x; SA_POV_TGT.y = curPt.y; SA_POV_TGT.z = curPt.z;
+
+                var tdx1 = SA_POV_TGT.x - ox1, tdy1 = SA_POV_TGT.y - oy1, tdz1 = SA_POV_TGT.z - oz1;
+                var tlen1 = Math.hypot(tdx1, tdy1, tdz1);
+                if (tlen1 < 0.2) return origHT.call(this, o, d, range);
+
+                var THREE1 = getTHREE();
+                var no1, nd1;
+                if (THREE1 && THREE1.Vector3) {
+                  no1 = new THREE1.Vector3(ox1, oy1, oz1);
+                  nd1 = new THREE1.Vector3(tdx1 / tlen1, tdy1 / tlen1, tdz1 / tlen1);
+                } else {
+                  no1 = cam1.position.clone(); no1.set(ox1, oy1, oz1);
+                  nd1 = cam1.position.clone(); nd1.set(tdx1 / tlen1, tdy1 / tlen1, tdz1 / tlen1);
+                }
+                var finalRange1 = Math.max(tlen1 + 10, typeof range === 'number' ? range : 500, 500);
+                return origHT.call(this, no1, nd1, finalRange1);
+              } catch (e1) {
+                try { return origHT.call(this, o, d, range); } catch (e2) { return null; }
+              }
+            }
+
+            // 2. Mode Silent Aim 360° (Tab SLNT)
             if (!SA.on) {
               try { return origHT.call(this, o, d, range); } catch (e) { return null; }
             }
@@ -1476,7 +1572,7 @@
     })();
 
     /* --------------------------------------------------------------------------
-       2.10 ESP & VISUAL OVERLAYS (BOX, BONE, RADAR, TRACER, POV RING)
+       2.10 ESP & VISUAL OVERLAYS (BOX, BONE, RADAR, TRACER, AUTO POV RING)
        -------------------------------------------------------------------------- */
     var E = { on: 1, nameOn: 0, wrap: null, slots: [], last: 0, n: 0, v: null };
     var HPO = { on: 0 };
@@ -1735,10 +1831,11 @@
       for (; idx < RD.dots.length; idx++) RD.dots[idx].style.display = 'none';
     }
 
-    // POV CIRCLE OVERLAY (SELALU AKTIF SAAT LOCK MODE = POV)
-    var FC = { on: 1, el: null };
+    // POV CIRCLE OVERLAY (Otomatis muncul hanya jika fitur POV aktif)
+    var FC = { el: null };
     function fcTick() {
-      if (!FC.on || P.lockMode !== 'pov') {
+      var needPov = (aimOn && P.lockMode === 'pov') || !!P.silentPov;
+      if (!needPov) {
         if (FC.el) FC.el.style.display = 'none';
         return;
       }
@@ -1753,6 +1850,7 @@
         FC.el = w;
       }
       FC.el.style.display = 'block';
+      FC.el.style.borderColor = P.silentPov ? 'rgba(16,185,129,0.9)' : 'rgba(6,182,212,0.85)';
       var r = P.povCircleR;
       FC.el.style.width = (r * 2).toFixed(0) + 'px';
       FC.el.style.height = (r * 2).toFixed(0) + 'px';
@@ -1819,10 +1917,10 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.11 UNIFIED MAIN LOOP (HYPERION HARD-LOCK AIMBOT + ALL VANGUARD FEATURES)
+       2.11 UNIFIED MAIN LOOP (HARD-LOCK AIMBOT + SILENT AIM POV + VANGUARD FEATURES)
        -------------------------------------------------------------------------- */
     var _timers = {
-      wb: 0, esp: 0, bone: 0, tracer: 0, silentScan: 0, silentFire: 0,
+      wb: 0, esp: 0, bone: 0, tracer: 0, silentScan: 0, silentPovScan: 0,
       respawn: 0, trigger: 0, ammo: 0, dmg: 0, snade: 0
     };
 
@@ -1840,7 +1938,6 @@
       requestAnimationFrame(mainLoop);
       var now = performance.now();
 
-      // Render POV Circle selalu jalan bahkan sebelum G terdeteksi
       try { fcTick(); } catch (e) {}
 
       revalidateG();
@@ -1996,6 +2093,18 @@
         trClear();
       }
 
+      if (P.silentPov) {
+        if (now - _timers.silentPovScan >= 20) {
+          _timers.silentPovScan = now;
+          try {
+            saPovUpdate(g);
+            patchBotHitTest();
+          } catch (e) {}
+        }
+      } else {
+        SA_POV_TGT.bot = null;
+      }
+
       if (SA.on) {
         if (now - _timers.silentScan >= 25) {
           _timers.silentScan = now;
@@ -2060,7 +2169,7 @@
       }
 
       /* =========================================================================
-         HYPERION HARD-LOCK AIMBOT CORE (Sticky Target + Flick Break + Instant Lock)
+         HYPERION HARD-LOCK AIMBOT CORE
          ========================================================================= */
       var list = g.bots || [];
       var best = null, bestPt = null, bestScore = 1e9, bestA = 1e9, bestD = 1e9;
@@ -2144,7 +2253,6 @@
       st.lock = 1;
       lastPick = best;
 
-      // Hanya menembak otomatis jika fitur Auto Fire benar-benar dihidupkan
       if (!P.autoFire || now < nextTap || holding) {
         aimFlush(g);
         return;
@@ -2191,8 +2299,8 @@
       try {
         var Bx = W.PBAndroid;
         var v = Bx && Bx.poll ? Bx.poll() : 0;
-        if (v === 1) { aimOn = true; st.aim = true; buzz([20, 40, 20]); }
-        else if (v === -1) { aimOn = false; st.aim = false; AIMLOCK.locked = false; up(); buzz(60); }
+        if (v === 1) { aimOn = true; st.aim = true; fcTick(); buzz([20, 40, 20]); }
+        else if (v === -1) { aimOn = false; st.aim = false; AIMLOCK.locked = false; fcTick(); up(); buzz(60); }
       } catch (e) {}
     }, 120);
 
@@ -2202,7 +2310,7 @@
     var PB_API = {
       state: function () {
         return {
-          v: V, aim: aimOn, G: !!G, bots: st.bots, enemies: st.enemies, lock: st.lock,
+          v: V, aim: aimOn, silentPov: P.silentPov, G: !!G, bots: st.bots, enemies: st.enemies, lock: st.lock,
           dist: +st.dist.toFixed(2), mode: P.mode, aimMode: P.aimMode,
           povCircleR: P.povCircleR, hitbox: P.hitbox,
           err: +(st.err * 57.2958).toFixed(2), fire: fireHeld, autoFire: P.autoFire,
@@ -2210,9 +2318,22 @@
           bulletSpeed: P.bulletSpeed, leadFactor: P.leadFactor, lockMode: P.lockMode
         };
       },
-      cfg: function (o) { if (o) for (var k in o) if (k in P) P[k] = o[k]; return P; },
-      on: function () { aimOn = true; st.aim = true; return 'on'; },
-      off: function () { aimOn = false; st.aim = false; AIMLOCK.locked = false; up(); return 'off'; },
+      cfg: function (o) { if (o) for (var k in o) if (k in P) P[k] = o[k]; fcTick(); return P; },
+      on: function () { aimOn = true; st.aim = true; fcTick(); return 'on'; },
+      off: function () { aimOn = false; st.aim = false; AIMLOCK.locked = false; fcTick(); up(); return 'off'; },
+      silentPov: function (on) {
+        P.silentPov = on ? 1 : 0;
+        st.silentPov = P.silentPov;
+        if (!P.silentPov) {
+          SA_POV_TGT.bot = null;
+        } else {
+          var g = G || game();
+          if (g) saPovUpdate(g);
+        }
+        patchBotHitTest();
+        fcTick();
+        return P.silentPov;
+      },
       aimMode: function () { P.aimMode = 'pov'; return P.aimMode; },
       povCircle: function (v) { if (typeof v === 'number' && v >= 1) { P.povCircleR = v; fcTick(); } return P.povCircleR; },
       hitbox: function (v) { if (v === 'head' || v === 'body' || v === 'nearest') { P.hitbox = v; st.hitbox = v; } return P.hitbox; },
@@ -2315,7 +2436,7 @@
       respawn: function (on) { IR.on = on ? 1 : 0; return IR.on; },
       radar: function (on) { RD.on = on ? 1 : 0; if (!on && RD.el) RD.el.style.display = 'none'; return RD.on; },
       hpo: function (on) { HPO.on = on ? 1 : 0; return HPO.on; },
-      fovc: function (on) { FC.on = on ? 1 : 0; fcTick(); return FC.on; },
+      fovc: function () { fcTick(); return ((aimOn && P.lockMode === 'pov') || !!P.silentPov) ? 1 : 0; },
       tracer: function (on) { TR.on = on ? 1 : 0; if (!on) trClear(); return TR.on; },
       wallbang: function (on) { FL.wallbang = on ? 1 : 0; patchBotHitTest(); return FL.wallbang; },
       infAmmo: function (on) { FL.infAmmo = on ? 1 : 0; return FL.infAmmo; },
@@ -2404,6 +2525,7 @@
       panic: function () {
         try {
           PERF.on = 0; perfRestoreRefs();
+          P.silentPov = 0; SA_POV_TGT.bot = null;
           SA.on = 0; SA.autoShoot = 0; SA.tapShot = 0; releaseSilentFire();
           FL.godmode = 0; FL.noclip = 0; FLY.on = 0; QC.on = 0; ncUninstall();
           try { saveSettings(); } catch (e) {}
@@ -2414,10 +2536,13 @@
       st: function () {
         return {
           pred: PR.on, rapid: RF.on, rapidAntiSpam: RF.antiSpam,
-          instScope: IS.on, trig: TB.on, silent: SA.on, silentAutoShoot: SA.autoShoot,
+          instScope: IS.on, trig: TB.on, silent: SA.on, silentPov: P.silentPov,
+          silentAutoShoot: SA.autoShoot,
           silentTapShot: SA.tapShot, silentTarget: SA.target, silentFov: SA.fovDeg,
           silentMinDist: SA.minDist,
-          lob: SL.on, respawn: IR.on, radar: RD.on, hpo: HPO.on, fovc: FC.on, tracer: TR.on,
+          lob: SL.on, respawn: IR.on, radar: RD.on, hpo: HPO.on,
+          fovc: ((aimOn && P.lockMode === 'pov') || !!P.silentPov) ? 1 : 0,
+          tracer: TR.on,
           wallbang: FL.wallbang, infAmmo: FL.infAmmo, noRecoil: FL.noRecoil,
           godmode: FL.godmode, noclip: FL.noclip, antiKick: FL.antiKick,
           hardLock: P.hardLock, sticky: P.sticky, smoothFire: SF.on,
@@ -2457,7 +2582,7 @@
         var xs = PBX_API.st();
         var data = {
           version: 6,
-          aim: ps.aim, povCircleR: ps.povCircleR, hitbox: ps.hitbox,
+          aim: ps.aim, silentPov: P.silentPov, povCircleR: ps.povCircleR, hitbox: ps.hitbox,
           hardLock: P.hardLock, sticky: P.sticky,
           bulletSpeed: ps.bulletSpeed, leadFactor: ps.leadFactor, lockMode: ps.lockMode,
           autoFire: P.autoFire, sens: O.sens, fov: O.fov, invert: O.invert,
@@ -2468,7 +2593,7 @@
           trig: xs.trig, silent: xs.silent,
           silentAutoShoot: xs.silentAutoShoot, silentTapShot: xs.silentTapShot,
           silentTarget: xs.silentTarget, silentFov: xs.silentFov, silentMinDist: xs.silentMinDist,
-          lob: SL.on, respawn: xs.respawn, radar: xs.radar, hpo: xs.hpo, fovc: xs.fovc, tracer: xs.tracer,
+          lob: SL.on, respawn: xs.respawn, radar: xs.radar, hpo: xs.hpo, tracer: xs.tracer,
           wallbang: xs.wallbang, infAmmo: xs.infAmmo, noRecoil: xs.noRecoil,
           godmode: xs.godmode, noclip: xs.noclip, antiKick: xs.antiKick,
           smoothFire: xs.smoothFire, infNade: xs.infNade, infNadeMax: xs.infNadeMax,
@@ -2494,6 +2619,7 @@
       if (!d || d.version !== 6) return;
       try {
         if (d.aim != null) d.aim ? PB_API.on() : PB_API.off();
+        if (d.silentPov != null) PB_API.silentPov(d.silentPov);
         if (d.povCircleR > 0) PB_API.povCircle(d.povCircleR);
         if (d.hitbox) PB_API.hitbox(d.hitbox);
         if (d.hardLock != null) PB_API.hardLock(d.hardLock);
@@ -2530,7 +2656,6 @@
         if (d.respawn != null) PBX_API.respawn(d.respawn);
         if (d.radar != null) PBX_API.radar(d.radar);
         if (d.hpo != null) PBX_API.hpo(d.hpo);
-        if (d.fovc != null) PBX_API.fovc(d.fovc);
         if (d.tracer != null) PBX_API.tracer(d.tracer);
         if (d.wallbang != null) PBX_API.wallbang(d.wallbang);
         if (d.infAmmo != null) PBX_API.infAmmo(d.infAmmo);
@@ -2561,6 +2686,7 @@
         if (d.perfLevel >= 1 && d.perfLevel <= 3) PBX_API.perfLevel(d.perfLevel);
 
         if (d.flyOn != null) PBX_API.fly(d.flyOn);
+        fcTick();
       } catch (e) { log('restoreSettings err', e); }
     }
 
@@ -2844,13 +2970,17 @@
         return b;
       }
 
-      // TAB 1: HARD-LOCK AIMBOT (HYPERION ENGINE)
+      // TAB 1: HARD-LOCK AIMBOT & SILENT AIM POV
       (function () {
         var pg = pages.aim;
         pg.appendChild(sec('Hyperion Hard-Lock Aimbot', 'fa-crosshairs'));
-        var r1 = row('Hard Aimbot', 'Aktifkan hard-lock target di dalam POV');
+        var r1 = row('Hard Aimbot', 'Kunci kamera ke target di dalam POV');
         r1.appendChild(sw(function () { return aimOn; }, function (v) { v ? PB_API.on() : PB_API.off(); }));
         pg.appendChild(r1);
+
+        var rSp = row('Silent Aim POV', 'Peluru kena target di POV Circle (tanpa 1-hit)');
+        rSp.appendChild(sw(function () { return P.silentPov; }, function (v) { PB_API.silentPov(v); }));
+        pg.appendChild(rSp);
 
         var r2 = row('Lock Saat Tembak', 'OFF = Selalu mengunci target di POV');
         r2.appendChild(sw(function () { return P.hardLock; }, function (v) { PB_API.hardLock(v); }));
@@ -2871,7 +3001,7 @@
           function () { return P.lockMode; },
           function (v) { PB_API.lockMode(v); }));
 
-        pg.appendChild(slider('POV Circle', 40, 600, 10,
+        pg.appendChild(slider('POV Circle', 5, 600, 5,
           function () { return P.povCircleR; },
           function (v) { PB_API.povCircle(v); },
           function (v) { return v + 'px'; }));
@@ -2936,10 +3066,6 @@
         var r6 = row('Radar', 'Mini map musuh');
         r6.appendChild(sw(function () { return RD.on; }, function (v) { PBX_API.radar(v); }));
         pg.appendChild(r6);
-
-        var r7 = row('FOV Circle', 'Ring POV');
-        r7.appendChild(sw(function () { return FC.on; }, function (v) { PBX_API.fovc(v); }));
-        pg.appendChild(r7);
 
         pg.appendChild(sec('Damage', 'fa-explosion'));
         pg.appendChild(slider('Dmg Multi', 1, 3, 0.1,
