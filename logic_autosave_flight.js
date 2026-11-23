@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PBWEB - VANGUARD ELITE
 // @namespace    vanguardelite.local
-// @version      2.2.2
-// @description  VANGUARD ELITE (Hyperion Hard-Lock Aimbot + ESP + 360 silent aim + anti-kick + performance mode, keyless)
+// @version      2.2.3
+// @description  VANGUARD ELITE (Hyperion Hard-Lock Aimbot + ESP + 360 Silent Aim + Anti-Kick + Performance Mode, Stable Build)
 // @match        *://pbmobile.app/*
 // @match        *://*.pbmobile.app/*
 // @run-at       document-start
@@ -20,7 +20,7 @@
   if (W.__pb) return;
 
   /* ============================================================================
-1. TOP-LEFT TIKTOK BADGE (@pbmobile_id)
+     1. TOP-LEFT TIKTOK BADGE (@pbmobile_id)
      ============================================================================ */
   function ensureLobbyBadge() {
     try {
@@ -49,10 +49,10 @@
   ensureLobbyBadge();
 
   /* ============================================================================
-2. CORE ENGINE
+     2. CORE ENGINE
      ============================================================================ */
   function bootCore() {
-    var V = '2.2.2';
+    var V = '2.2.3';
     var BRAND = 'VANGUARD ELITE';
 
     function log() {
@@ -223,9 +223,8 @@
       aimMode: 'pov',
       povCircleR: 220,
       hitbox: 'head',
-      // Parameter Hyperion Hard-Lock Aimbot
-      hardLock: 1,       // 1 = Kunci saat tombol tembak ditahan, 0 = Selalu kunci target di POV
-      sticky: 0.85,      // 0.0 - 1.0 (Kekuatan mengunci target yang sama)
+      hardLock: 0,       // 0 = Langsung kunci target saat masuk POV (stabil di mobile & PC)
+      sticky: 0.85,
       bulletSpeed: 350,
       leadFactor: 1.0,
       lockMode: 'pov'
@@ -246,7 +245,7 @@
     };
 
     var G = null;
-    var aimOn = true; // Hyperion Hard-Lock default aktif
+    var aimOn = true;
     var fireHeld = 0;
     var nextTap = 0;
     var holding = false;
@@ -276,23 +275,6 @@
     }
     readOpts();
     try { addEventListener('pbopts', readOpts); } catch (e) {}
-
-    try {
-      var _pr = parseFloat(localStorage.getItem('ir_povcirc'));
-      if (isFinite(_pr) && _pr >= 1) P.povCircleR = _pr;
-      var _hb = localStorage.getItem('ir_hitbox');
-      if (_hb === 'head' || _hb === 'body' || _hb === 'nearest') P.hitbox = _hb;
-      var _hl = localStorage.getItem('ir_hardlock');
-      if (_hl === '1' || _hl === '0') P.hardLock = +_hl;
-      var _st = parseFloat(localStorage.getItem('ir_sticky'));
-      if (isFinite(_st) && _st >= 0 && _st <= 1) P.sticky = _st;
-      var _bs = parseFloat(localStorage.getItem('ir_bullet_speed'));
-      if (isFinite(_bs) && _bs > 0) P.bulletSpeed = _bs;
-      var _lf = parseFloat(localStorage.getItem('ir_lead'));
-      if (isFinite(_lf) && _lf >= 0) P.leadFactor = _lf;
-      var _lm = localStorage.getItem('ir_lockmode');
-      if (_lm === 'legacy' || _lm === 'pov') P.lockMode = _lm;
-    } catch (e) {}
 
     /* --------------------------------------------------------------------------
        2.3 UTILITAS UMUM, GAME INSTANCE & CANVAS HELPER
@@ -362,6 +344,7 @@
     var _hpOut = { x: 0, y: 0, z: 0 };
     var _leadOut = { x: 0, y: 0, z: 0 };
     var _pv = null;
+    var _pvCam = null;
     var _pDir = { x: 0, y: 0, z: 0 };
     var F = { x: 0, y: 0, z: 0 };
     var C = { x: 0, y: 0, z: 0 };
@@ -453,17 +436,20 @@
         var now = performance.now();
         if (p) {
           var c = _povCache.get(p);
-          if (c && now - c.t < 100) return c.v;
+          if (c && now - c.t < 45) return c.v;
         }
-        if (!_pv) _pv = cam.position.clone();
+        if (!_pv || _pvCam !== cam) {
+          _pv = cam.position.clone();
+          _pvCam = cam;
+        }
         var ndc = _pv.set(hp.x, hp.y, hp.z).project(cam);
         if (!(ndc.z > -1 && ndc.z < 1)) {
           if (p) _povCache.set(p, { t: now, v: false });
           return false;
         }
-        var px = ndc.x * (innerWidth / 2);
-        var py = -ndc.y * (innerHeight / 2);
-        var v = Math.sqrt(px * px + py * py) <= P.povCircleR;
+        var px = ndc.x * (innerWidth * 0.5);
+        var py = -ndc.y * (innerHeight * 0.5);
+        var v = (px * px + py * py) <= (P.povCircleR * P.povCircleR);
         if (p) _povCache.set(p, { t: now, v: v });
         return v;
       } catch (e) { return false; }
@@ -535,7 +521,7 @@
     }
 
     /* --------------------------------------------------------------------------
-       2.5 INPUT MOUSE, TOUCH & YAW/PITCH LOCK
+       2.5 INPUT MOUSE, TOUCH & YAW/PITCH LOCK (ANTI AUTO-FIRE BUG)
        -------------------------------------------------------------------------- */
     function aimWrite(dx, dy) {
       AIM.dx += dx;
@@ -548,7 +534,7 @@
       AIM.queued = false;
       var s = g && g.P && g.P.s;
       if (!s || s.dead) { AIM.dx = AIM.dy = 0; return; }
-      if (AIMLOCK.locked && P.lockMode !== 'pov') { AIM.dx = AIM.dy = 0; return; }
+      if (AIMLOCK.locked) { AIM.dx = AIM.dy = 0; return; }
 
       var sens = O.sens * ((g.camera && g.camera.fov || 70) / O.fov) * 0.005;
       var dyaw = -AIM.dx * sens;
@@ -612,36 +598,37 @@
       }
       if (e.movementX || e.movementY) aimWrite(e.movementX, e.movementY);
     }, true);
+
     addEventListener('mousedown', function (e) {
+      if (e.target && e.target.closest && e.target.closest('#vanguard-panel')) return;
       if (e.button === 0) { fireHeld = 1; st.fire = 1; }
     }, true);
+
     addEventListener('mouseup', function (e) {
       if (e.button === 0) { fireHeld = 0; st.fire = 0; }
     }, true);
+
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         fireHeld = 0; st.fire = 0;
         if (typeof FLY !== 'undefined') { FLY.jumpHeld = 0; FLY.crouchHeld = 0; }
-        if (silentHolding) up();
+        if (silentHolding || holding) up();
       }
     });
 
+    // Hanya mendeteksi tombol tembak asli game (tidak salah deteksi saat geser layar kanan bawah)
     var fireIds = new Set();
-    function inZone(t) { return t.clientX > innerWidth * 0.50 && t.clientY > innerHeight * 0.45; }
+    function isFireButton(el) {
+      if (!el || !el.closest) return false;
+      if (el.closest('#vanguard-panel')) return false;
+      return !!el.closest('[data-action="fire"], .btn-fire, #btn-fire, #fire, [class*="fire"], [id*="fire"], [class*="shoot"], [id*="shoot"]');
+    }
     function syncFire() { fireHeld = fireIds.size; st.fire = fireHeld; }
 
     addEventListener('touchstart', function (e) {
       for (var i = 0; i < e.changedTouches.length; i++) {
         var t = e.changedTouches[i];
-        if (inZone(t)) { fireIds.add(t.identifier); }
-      }
-      syncFire();
-    }, true);
-    addEventListener('touchmove', function (e) {
-      for (var i = 0; i < e.changedTouches.length; i++) {
-        var t = e.changedTouches[i];
-        if (inZone(t)) fireIds.add(t.identifier);
-        else fireIds.delete(t.identifier);
+        if (isFireButton(t.target)) fireIds.add(t.identifier);
       }
       syncFire();
     }, true);
@@ -661,7 +648,7 @@
     addEventListener('blur', function () {
       fireHeld = 0; st.fire = 0;
       FLY.jumpHeld = 0; FLY.crouchHeld = 0;
-      if (silentHolding) up();
+      if (silentHolding || holding) up();
     });
 
     function flyPosObj(s) {
@@ -679,8 +666,13 @@
     function flyTick(dt) {
       if (!FLY.on) return false;
       var g = G || game();
-      if (!g || !g.P || !g.P.s || g.P.s.dead) return false;
-      var s = g.P.s, m = s.mover;
+      var s = g && g.P && g.P.s;
+      if (!s || s.dead) {
+        FLY.groundY = null;
+        FLY.hoverY = null;
+        return false;
+      }
+      var m = s.mover;
       var pos = flyPosObj(s);
       if (!pos || !isFinite(pos.y)) return false;
 
@@ -746,6 +738,8 @@
     }
 
     (function flyControls() {
+      if (W.__pbFlyInit) return;
+      W.__pbFlyInit = 1;
       function isInputFocused() {
         var el = document.activeElement;
         return el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
@@ -1211,7 +1205,6 @@
       return null;
     }
 
-    // Unified hitTest wrapper (Wallbang + Silent Aim 360°)
     function patchBotHitTest() {
       var g = G || game();
       var L = g && g.bots;
@@ -1237,14 +1230,14 @@
               if (SA_HEAD.bot !== this) {
                 return origHT.call(this, o, d, range);
               }
-              var curHp = saGetPoint(this, C);
-              if (!curHp) return origHT.call(this, o, d, range);
-              SA_HEAD.x = curHp.x; SA_HEAD.y = curHp.y; SA_HEAD.z = curHp.z;
-
               var cam = g2.camera;
               var me = cam && cam.matrixWorld && cam.matrixWorld.elements;
               if (!me) return origHT.call(this, o, d, range);
               var ox = me[12], oy = me[13], oz = me[14];
+              var curHp = saGetPoint(this, { x: ox, y: oy, z: oz });
+              if (!curHp) return origHT.call(this, o, d, range);
+              SA_HEAD.x = curHp.x; SA_HEAD.y = curHp.y; SA_HEAD.z = curHp.z;
+
               var tdx = SA_HEAD.x - ox, tdy = SA_HEAD.y - oy, tdz = SA_HEAD.z - oz;
               var tlen = Math.hypot(tdx, tdy, tdz);
               if (tlen < 0.2) return origHT.call(this, o, d, range);
@@ -1286,7 +1279,7 @@
       for (var i = 0; i < list.length; i++) {
         var p = list[i];
         if (!isHumanEnemy(p, s)) continue;
-        var hp = saGetPoint(p, C);
+        var hp = saGetPoint(p, { x: cx, y: cy, z: cz });
         if (!hp) continue;
         var dx = hp.x - cx, dy = hp.y - cy, dz = hp.z - cz;
         var d = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -1299,7 +1292,7 @@
       }
 
       if (!best) { SA_HEAD.bot = null; return; }
-      var targetPt = saGetPoint(best, C);
+      var targetPt = saGetPoint(best, { x: cx, y: cy, z: cz });
       if (!targetPt) { SA_HEAD.bot = null; return; }
       SA_HEAD.x = targetPt.x; SA_HEAD.y = targetPt.y; SA_HEAD.z = targetPt.z;
       SA_HEAD.bot = best;
@@ -1742,15 +1735,20 @@
       for (; idx < RD.dots.length; idx++) RD.dots[idx].style.display = 'none';
     }
 
-    var FC = { on: 1, el: null }; // Default POV Circle terlihat saat Hard-Lock aktif
+    // POV CIRCLE OVERLAY (SELALU AKTIF SAAT LOCK MODE = POV)
+    var FC = { on: 1, el: null };
     function fcTick() {
-      if (!FC.on) { if (FC.el) FC.el.style.display = 'none'; return; }
+      if (!FC.on || P.lockMode !== 'pov') {
+        if (FC.el) FC.el.style.display = 'none';
+        return;
+      }
       if (!FC.el || !FC.el.parentNode) {
         var host = document.body || document.documentElement;
         if (!host) return;
         var w = document.createElement('div');
+        w.id = 'vanguard-pov-circle';
         w.setAttribute('data-pb', '1');
-        w.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);border:1.5px dashed rgba(6,182,212,.85);border-radius:50%;z-index:2147482999;pointer-events:none;box-shadow:0 0 12px rgba(6,182,212,0.18)';
+        w.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);border:1.5px dashed rgba(6,182,212,.85);border-radius:50%;z-index:2147483500;pointer-events:none;box-shadow:0 0 12px rgba(6,182,212,0.18)';
         host.appendChild(w);
         FC.el = w;
       }
@@ -1841,6 +1839,9 @@
     function mainLoop() {
       requestAnimationFrame(mainLoop);
       var now = performance.now();
+
+      // Render POV Circle selalu jalan bahkan sebelum G terdeteksi
+      try { fcTick(); } catch (e) {}
 
       revalidateG();
       if (!G) return;
@@ -1973,7 +1974,6 @@
         try { snScanAndHoming(g); } catch (e) {}
       }
 
-      fcTick();
       if (RD.on) { try { rdDraw(g); } catch (e) {} } else if (RD.el) { RD.el.style.display = 'none'; }
 
       var vFps = perfVisualFps();
@@ -2066,7 +2066,6 @@
       var best = null, bestPt = null, bestScore = 1e9, bestA = 1e9, bestD = 1e9;
       var myTeam = self.team, n = 0, en = 0;
 
-      // Jika user menggeser layar/mouse dengan cepat (flick), lepaskan sticky target lama
       var userFlicking = (now - lastMouseTime < 350);
       if (userFlicking && P.sticky < 1.0) lastPick = null;
 
@@ -2091,7 +2090,6 @@
         var a = Math.hypot(ey, ep);
         if (a > P.cone) continue;
 
-        // Skoring sudut + Hyperion Target Stickiness
         var score = (P.mode === 'angle') ? a : (a + d * 0.002);
         if (bot === lastPick) {
           if (userFlicking && P.sticky < 1.0) {
@@ -2126,8 +2124,6 @@
       var tYaw = wrap(Math.atan2(-(bestPt.x - C.x), -(bestPt.z - C.z)));
       var tPitch = clamp(Math.asin(clamp((bestPt.y - C.y) / d2, -1, 1)), -1.5, 1.5);
 
-      // P.hardLock = 1 -> Kunci kamera saat tombol tembak ditahan (atau autoFire aktif)
-      // P.hardLock = 0 -> Selalu mengunci kamera selama target berada di dalam POV
       if (!P.hardLock || fireHeld > 0 || P.autoFire) {
         AIMLOCK.on = true;
         AIMLOCK.locked = true;
@@ -2135,6 +2131,10 @@
         AIMLOCK.targetPitch = tPitch;
         self.__pbYawRaw = tYaw;
         self.__pbPitchRaw = tPitch;
+        if (!self.__pbYawLocked) {
+          self.yaw = tYaw;
+          self.pitch = tPitch;
+        }
       } else {
         AIMLOCK.locked = false;
       }
@@ -2144,8 +2144,8 @@
       st.lock = 1;
       lastPick = best;
 
-      // Auto-Fire saat crosshair mengunci target (jika Auto Fire diaktifkan)
-      if (!(P.autoFire || fireHeld) || now < nextTap || holding) {
+      // Hanya menembak otomatis jika fitur Auto Fire benar-benar dihidupkan
+      if (!P.autoFire || now < nextTap || holding) {
         aimFlush(g);
         return;
       }
@@ -2213,35 +2213,33 @@
       cfg: function (o) { if (o) for (var k in o) if (k in P) P[k] = o[k]; return P; },
       on: function () { aimOn = true; st.aim = true; return 'on'; },
       off: function () { aimOn = false; st.aim = false; AIMLOCK.locked = false; up(); return 'off'; },
-      aimMode: function () { P.aimMode = 'pov'; try { localStorage.setItem('ir_aimmode', 'pov'); } catch (e) {} return P.aimMode; },
-      povCircle: function (v) { if (typeof v === 'number' && v >= 1) { P.povCircleR = v; try { localStorage.setItem('ir_povcirc', String(v)); } catch (e) {} } return P.povCircleR; },
-      hitbox: function (v) { if (v === 'head' || v === 'body' || v === 'nearest') { P.hitbox = v; st.hitbox = v; try { localStorage.setItem('ir_hitbox', v); } catch (e) {} } return P.hitbox; },
+      aimMode: function () { P.aimMode = 'pov'; return P.aimMode; },
+      povCircle: function (v) { if (typeof v === 'number' && v >= 1) { P.povCircleR = v; fcTick(); } return P.povCircleR; },
+      hitbox: function (v) { if (v === 'head' || v === 'body' || v === 'nearest') { P.hitbox = v; st.hitbox = v; } return P.hitbox; },
       lockMode: function (m) {
         if (m === 'legacy' || m === 'pov') {
           P.lockMode = m; st.lockMode = m;
-          try { localStorage.setItem('ir_lockmode', m); } catch (e) {}
           AIMLOCK.locked = false;
           _losCache = new WeakMap(); _povCache = new WeakMap();
+          fcTick();
         }
         return P.lockMode;
       },
       hardLock: function (on) {
         P.hardLock = on ? 1 : 0;
         st.hardLock = P.hardLock;
-        if (!P.hardLock && !aimOn) AIMLOCK.locked = false;
-        try { localStorage.setItem('ir_hardlock', P.hardLock ? '1' : '0'); } catch (e) {}
+        if (P.hardLock && !fireHeld && !P.autoFire) AIMLOCK.locked = false;
         return P.hardLock;
       },
       stickiness: function (v) {
         if (typeof v === 'number' && v >= 0 && v <= 1) {
           P.sticky = v; st.sticky = v;
-          try { localStorage.setItem('ir_sticky', String(v)); } catch (e) {}
         }
         return P.sticky;
       },
-      bulletSpeed: function (v) { if (typeof v === 'number' && v > 0) { P.bulletSpeed = v; try { localStorage.setItem('ir_bullet_speed', String(v)); } catch (e) {} } return P.bulletSpeed; },
-      leadFactor: function (v) { if (typeof v === 'number' && v >= 0) { P.leadFactor = v; try { localStorage.setItem('ir_lead', String(v)); } catch (e) {} } return P.leadFactor; },
-      autoFire: function (on) { P.autoFire = on ? 1 : 0; return P.autoFire; },
+      bulletSpeed: function (v) { if (typeof v === 'number' && v > 0) P.bulletSpeed = v; return P.bulletSpeed; },
+      leadFactor: function (v) { if (typeof v === 'number' && v >= 0) P.leadFactor = v; return P.leadFactor; },
+      autoFire: function (on) { P.autoFire = on ? 1 : 0; if (!P.autoFire && holding && !silentHolding) up(); return P.autoFire; },
       sens: function (v) { if (typeof v === 'number' && v > 0) { O.sens = v; try { var o = JSON.parse(localStorage.getItem('pbweb_opts') || '{}'); o.sens = v; localStorage.setItem('pbweb_opts', JSON.stringify(o)); } catch (e) {} } return O.sens; },
       fov: function (v) { if (typeof v === 'number' && v > 0) { O.fov = v; try { var o = JSON.parse(localStorage.getItem('pbweb_opts') || '{}'); o.fov = v; localStorage.setItem('pbweb_opts', JSON.stringify(o)); } catch (e) {} } return O.fov; },
       invert: function (on) { O.invert = !!on; try { var o = JSON.parse(localStorage.getItem('pbweb_opts') || '{}'); o.invert = O.invert; localStorage.setItem('pbweb_opts', JSON.stringify(o)); } catch (e) {} return O.invert; },
@@ -2317,7 +2315,7 @@
       respawn: function (on) { IR.on = on ? 1 : 0; return IR.on; },
       radar: function (on) { RD.on = on ? 1 : 0; if (!on && RD.el) RD.el.style.display = 'none'; return RD.on; },
       hpo: function (on) { HPO.on = on ? 1 : 0; return HPO.on; },
-      fovc: function (on) { FC.on = on ? 1 : 0; return FC.on; },
+      fovc: function (on) { FC.on = on ? 1 : 0; fcTick(); return FC.on; },
       tracer: function (on) { TR.on = on ? 1 : 0; if (!on) trClear(); return TR.on; },
       wallbang: function (on) { FL.wallbang = on ? 1 : 0; patchBotHitTest(); return FL.wallbang; },
       infAmmo: function (on) { FL.infAmmo = on ? 1 : 0; return FL.infAmmo; },
@@ -2448,9 +2446,9 @@
     });
 
     /* --------------------------------------------------------------------------
-       2.13 SETTINGS PERSISTENCE
+       2.13 SETTINGS PERSISTENCE (CLEAN V6)
        -------------------------------------------------------------------------- */
-    var SETTINGS_KEY = 'vanguard_settings_v5';
+    var SETTINGS_KEY = 'vanguard_settings_v6';
     var _saveTimer = 0;
 
     function saveSettings() {
@@ -2458,7 +2456,7 @@
         var ps = PB_API.state();
         var xs = PBX_API.st();
         var data = {
-          version: 5,
+          version: 6,
           aim: ps.aim, povCircleR: ps.povCircleR, hitbox: ps.hitbox,
           hardLock: P.hardLock, sticky: P.sticky,
           bulletSpeed: ps.bulletSpeed, leadFactor: ps.leadFactor, lockMode: ps.lockMode,
@@ -2493,7 +2491,7 @@
     function restoreSettings() {
       var d;
       try { d = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null'); } catch (e) { d = null; }
-      if (!d || d.version !== 5) return;
+      if (!d || d.version !== 6) return;
       try {
         if (d.aim != null) d.aim ? PB_API.on() : PB_API.off();
         if (d.povCircleR > 0) PB_API.povCircle(d.povCircleR);
@@ -2574,7 +2572,7 @@
     setInterval(saveSettings, 5000);
 
     /* ============================================================================
-3. UI SYSTEM (CYBER CYAN THEME & FULL DRAGGABLE PANEL)
+       3. UI SYSTEM (CYBER CYAN THEME & FULL DRAGGABLE PANEL)
        ============================================================================ */
     function mountUI() {
       var host = document.body || document.documentElement;
@@ -2686,6 +2684,9 @@
 
       var root = mk('div', 'fk expanded');
       root.id = 'vanguard-panel';
+      ['touchstart', 'touchmove', 'mousedown'].forEach(function (evName) {
+        root.addEventListener(evName, function (e) { e.stopPropagation(); }, false);
+      });
 
       var rail = mk('div', 'fk-rail');
       TABS.forEach(function (t, i) {
@@ -3157,7 +3158,6 @@
       log(BRAND, V, 'UI ready');
     }
 
-    // Pastikan UI selalu terpasang ulang setelah preboot document.write()
     mountUI();
     setInterval(function () {
       if (!document.getElementById('vanguard-panel')) mountUI();
